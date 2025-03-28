@@ -17,7 +17,11 @@ target_countries = [
 ]
 
 SENT_IDS_FILE = "sent_quake_ids.txt"
+LOG_FILE = "error.log"
 
+def log_error(message):
+    with open(LOG_FILE, "a") as f:
+        f.write(f"[{datetime.now()}] {message}\n")
 
 def load_sent_ids():
     if not os.path.exists(SENT_IDS_FILE):
@@ -25,13 +29,13 @@ def load_sent_ids():
     with open(SENT_IDS_FILE, "r") as f:
         return set(line.strip() for line in f.readlines())
 
-
 def save_sent_id(quake_id):
+    if not quake_id.isalnum():  # ป้องกันการเขียน ID ที่อันตราย
+        print(f"⚠️ ข้าม ID ที่ไม่ปลอดภัย: {quake_id}")
+        return
     with open(SENT_IDS_FILE, "a") as f:
         f.write(f"{quake_id}\n")
 
-
-# ส่ง Flex Message (Carousel หรือ Bubble)
 def broadcast_flex_message(contents, alt_text="แจ้งเตือนแผ่นดินไหว! / Earthquake Alert!"):
     url = 'https://api.line.me/v2/bot/message/broadcast'
     headers = {
@@ -47,14 +51,18 @@ def broadcast_flex_message(contents, alt_text="แจ้งเตือนแผ
             }
         ]
     }
-    response = requests.post(url, headers=headers, json=body)
-    if response.status_code == 200:
-        print("✅ ส่ง Flex message สำเร็จ")
-    else:
-        print("❌ Flex message error:", response.text)
 
+    try:
+        response = requests.post(url, headers=headers, json=body, timeout=10)
+        if response.status_code == 200:
+            print("✅ ส่ง Flex message สำเร็จ")
+        else:
+            print("❌ Flex message error:", response.text)
+            log_error(f"LINE Broadcast Failed: {response.text}")
+    except Exception as e:
+        print("❌ LINE Broadcast Exception:", e)
+        log_error(f"LINE Exception: {e}")
 
-# สร้าง Flex Message (Bubble)
 def build_flex_message(place, mag, local_time, lat, lon):
     search_query = urllib.parse.quote(f"แผ่นดินไหว {place}")
     map_query = urllib.parse.quote(f"{lat},{lon}")
@@ -115,15 +123,14 @@ def build_flex_message(place, mag, local_time, lat, lon):
         }
     }
 
-
 def get_country_from_place(place):
     try:
         if ',' in place:
             return place.split(",")[-1].strip().lower()
         return place.strip().lower()
-    except Exception:
+    except Exception as e:
+        log_error(f"Place parsing error: {e}")
         return ""
-
 
 def reverse_geocode(lat, lon):
     try:
@@ -136,8 +143,8 @@ def reverse_geocode(lat, lon):
             return data.get("address", {}).get("country", "").lower()
     except Exception as e:
         print("⚠️ Reverse geocoding error:", e)
+        log_error(f"Reverse Geocode Failed: {e}")
     return ""
-
 
 def main():
     url = "https://earthquake.usgs.gov/fdsnws/event/1/query"
@@ -147,13 +154,13 @@ def main():
         "limit": 10,
         "minmagnitude": 3
     }
-
-    response = requests.get(url, params=params)
-    if response.status_code != 200:
-        print(f"❌ ไม่สามารถดึงข้อมูลได้: {response.status_code}")
-        return
-
     try:
+        response = requests.get(url, params=params, timeout=10)
+        if response.status_code != 200:
+            print(f"❌ ไม่สามารถดึงข้อมูลได้: {response.status_code}")
+            log_error(f"USGS Fetch Failed: {response.status_code}")
+            return
+
         data = response.json()
         print("🌏 ตรวจสอบแผ่นดินไหวล่าสุด...\n")
         sent_ids = load_sent_ids()
@@ -195,9 +202,11 @@ def main():
                     bubble = build_flex_message(place, mag, local_time, lat, lon)
                     bubbles.append(bubble)
                     save_sent_id(quake_id)
+                    print(local_time, place, mag, lat, lon)
 
             except Exception as e:
                 print("❌ ERROR ในรายการ:", e)
+                log_error(f"Loop Error: {e}")
 
         if bubbles:
             if len(bubbles) == 1:
@@ -208,11 +217,9 @@ def main():
 
     except Exception as e:
         print("❌ อ่านข้อมูล JSON ไม่ได้:", e)
+        log_error(f"Main Error: {e}")
 
-
-# เรียกใช้งานทุก 5 นาที
 schedule.every(5).minutes.do(main)
-
 print("🌀 เริ่มต้นระบบแจ้งเตือนแผ่นดินไหวทุก 5 นาที...\n")
 
 while True:
